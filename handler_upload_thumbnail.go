@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +38,18 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
+	videoData, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Could not retrieve video data", err)
+		return
+	}
+
+	if userID != videoData.UserID {
+		err = errors.New("Video does not belong to user")
+		respondWithError(w, http.StatusUnauthorized, err.Error(), err)
+		return
+	}
+
 	const maxMemory = 10 << 20
 
 	err = r.ParseMultipartForm(maxMemory)
@@ -49,18 +63,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Couldn't read thumbnail", err)
 		return
 	}
-
-	videoData, err := cfg.db.GetVideo(videoID)
-	if err != nil {
-		respondWithError(w, http.StatusNotFound, "Could not retrieve video data", err)
-		return
-	}
-
-	if userID != videoData.UserID {
-		err = errors.New("Video does not belong to user")
-		respondWithError(w, http.StatusUnauthorized, err.Error(), err)
-		return
-	}
+	defer file.Close()
 
 	mediaType, _, _ := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if mediaType != "image/jpg" && mediaType != "image/png" {
@@ -70,7 +73,15 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	fileExtension := strings.Split(mediaType, "/")[1]
-	filePath := filepath.Join(cfg.assetsRoot, (videoID.String() + "." + fileExtension))
+	var randFileName = make([]byte, 32)
+	_, err = rand.Read(randFileName)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create filename", err)
+		return
+	}
+	randFileNameBase64 := base64.RawURLEncoding.EncodeToString(randFileName)
+
+	filePath := filepath.Join(cfg.assetsRoot, (string(randFileNameBase64) + "." + fileExtension))
 
 	thumbFile, err := os.Create(filePath)
 	if err != nil {
